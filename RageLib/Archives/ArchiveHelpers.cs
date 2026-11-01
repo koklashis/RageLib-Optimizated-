@@ -1,0 +1,133 @@
+/*
+    Copyright(c) 2015 Neodymium
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+*/
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+
+namespace RageLib.Archives
+{
+    public class DataBlock
+    {
+        public long Offset { get; set; }
+        public long Length { get; set; }
+        public object Tag { get; set; }
+
+        public DataBlock(long offset, long length, object tag = null)
+        {
+            this.Offset = offset;
+            this.Length = length;
+            this.Tag = tag;
+        }
+    }
+
+    public static class ArchiveHelpers
+    {
+        private const int MAX_BUFFER_SIZE = 2 * 1024 * 1024; // 2 MB for high sequential disk throughput
+        private static readonly Comparison<DataBlock> BlockComparison = (a, b) => a.Offset.CompareTo(b.Offset);
+
+        /// <summary>
+        /// Given a list of data blocks, this method finds the maximum length of a specified data block.
+        /// </summary>
+        public static long FindSpace(List<DataBlock> blocks, DataBlock item)
+        {
+            // sort list...
+            blocks.Sort(BlockComparison);
+            
+            // find smallest follow element in sorted list
+            DataBlock next = null;
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                var x = blocks[i];
+                if (x != item && x.Offset >= item.Offset)
+                {
+                    next = x;
+                    break;
+                }
+            }
+
+            if (next == null)
+                return long.MaxValue;
+            
+            return next.Offset - item.Offset;
+        }
+
+        /// <summary>
+        /// Given a list of data blocks, this method finds an block of empty space of specified length.
+        /// </summary>
+        public static long FindOffset(List<DataBlock> blocks, long neededSpace, long blockSize = 1)
+        {
+            var lst = new List<DataBlock>(blocks.Count);
+            lst.AddRange(blocks);
+
+            // sort list...
+            lst.Sort(BlockComparison);
+
+            if (lst.Count == 0)
+                return 0;
+
+            // patch...
+            for (int i = 0; i < lst.Count - 1; i++)
+            {
+                lst[i].Length = Math.Min(lst[i].Length, lst[i + 1].Offset - lst[i].Offset);
+            }
+            
+            long offset = 0;
+            for (int i = 0; i < lst.Count; i++)
+            {
+                long len = lst[i].Offset - offset;
+                if (len >= neededSpace)
+                    return offset;
+
+                offset = lst[i].Offset + lst[i].Length;
+                offset = (long)Math.Ceiling((double)offset / (double)blockSize) * blockSize;
+            }
+
+            return offset;
+        }
+
+        /// <summary>
+        /// Moves bytes within a stream efficiently with a large buffer.
+        /// </summary>
+        public static void MoveBytes(Stream stream, long sourceOffset, long destinationOffset, long length)
+        {
+            int bufferSize = (int)Math.Min(length, MAX_BUFFER_SIZE);
+            if (bufferSize < 65536) bufferSize = 65536;
+
+            var buffer = new byte[bufferSize];
+            while (length > 0)
+            {
+                int toRead = (int)Math.Min(length, buffer.Length);
+                stream.Position = sourceOffset;
+                int i = stream.Read(buffer, 0, toRead);
+                if (i == 0) break;
+
+                stream.Position = destinationOffset;
+                stream.Write(buffer, 0, i);
+
+                sourceOffset += i;
+                destinationOffset += i;
+                length -= i;
+            }
+        }
+    }
+}
